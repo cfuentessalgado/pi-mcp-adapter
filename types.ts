@@ -1,7 +1,6 @@
 // types.ts - Core type definitions
-import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import type { SSEClientTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { UiStreamMode } from "./ui-stream-types.ts";
 
@@ -17,6 +16,7 @@ export type ImportKind =
   | "claude-code" 
   | "claude-desktop" 
   | "codex" 
+  | "opencode"
   | "windsurf" 
   | "vscode";
 
@@ -35,6 +35,20 @@ export interface McpResource {
   name: string;
   description?: string;
   mimeType?: string;
+  _meta?: Record<string, unknown>;
+}
+
+export interface McpPromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface McpPrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: McpPromptArgument[];
   _meta?: Record<string, unknown>;
 }
 
@@ -64,14 +78,9 @@ export interface UiProxyResult<T = Record<string, unknown>> {
 }
 
 export interface UiResourceCsp {
+  resourceDomains?: string[];
   connectDomains?: string[];
-  scriptDomains?: string[];
-  styleDomains?: string[];
-  fontDomains?: string[];
-  imgDomains?: string[];
-  mediaDomains?: string[];
   frameDomains?: string[];
-  workerDomains?: string[];
   baseUriDomains?: string[];
 }
 
@@ -305,7 +314,7 @@ export interface ServerEntry {
    * Set to false to explicitly disable OAuth for this server.
    */
   oauth?: OAuthConfig | false;
-  lifecycle?: "keep-alive" | "lazy" | "eager";
+  lifecycle?: "keep-alive" | "lazy" | "lazy-keep-alive" | "eager";
   idleTimeout?: number; // minutes, overrides global setting
   requestTimeoutMs?: number; // milliseconds, overrides global request timeout when > 0
   // Resource handling
@@ -316,6 +325,13 @@ export interface ServerEntry {
   excludeTools?: string[];
   // Debug
   debug?: boolean;  // Show server stderr (default: false)
+  // Keep configuration visible without allowing connections or execution.
+  disabled?: boolean;
+}
+
+/** Only the literal boolean `true` disables a server. */
+export function isServerDisabled(definition: ServerEntry | undefined): boolean {
+  return definition?.disabled === true;
 }
 
 // Output guard tuning (settings.outputGuard object form)
@@ -329,8 +345,10 @@ export interface McpOutputGuardSettings {
 }
 
 // Settings
+export type ToolPrefix = "server" | "none" | "short" | "mcp";
+
 export interface McpSettings {
-  toolPrefix?: "server" | "none" | "short";
+  toolPrefix?: ToolPrefix;
   idleTimeout?: number; // minutes, default 10, 0 to disable
   requestTimeoutMs?: number; // milliseconds, overrides the SDK request timeout when > 0
   directTools?: boolean;
@@ -352,6 +370,15 @@ export interface McpSettings {
    * instruction when unset.
    */
   authRequiredMessage?: string;
+  /**
+   * Override the default OAuth token storage directory.
+   * Relative paths are resolved from the project root (cwd).
+   * Takes precedence over the agent's mcp-oauth/ directory but
+   * can still be overridden by the MCP_OAUTH_DIR env variable.
+   *
+   * Example: ".pi/mcp-oauth" stores tokens in <project>/.pi/mcp-oauth/
+   */
+  oauthDir?: string;
 }
 
 // Root config
@@ -359,6 +386,11 @@ export interface McpConfig {
   mcpServers: Record<string, ServerEntry>;
   imports?: ImportKind[];
   settings?: McpSettings;
+}
+
+export interface McpAdapterOptions {
+  config?: McpConfig;
+  configPath?: string;
 }
 
 // Alias for clarity
@@ -372,6 +404,15 @@ export interface ToolMetadata {
   uiResourceUri?: string; // For app-enabled tools: the UI resource URI
   inputSchema?: unknown;  // JSON Schema for parameters (stored for describe/errors)
   uiStreamMode?: UiStreamMode;
+}
+
+export interface PromptMetadata {
+  serverName: string;
+  originalName: string;
+  commandName: string;
+  title?: string;
+  description: string;
+  arguments: McpPromptArgument[];
 }
 
 export interface DirectToolSpec {
@@ -400,7 +441,8 @@ export interface McpPanelCallbacks {
   reconnect: (serverName: string) => Promise<boolean>;
   canAuthenticate: (serverName: string) => boolean;
   authenticate: (serverName: string) => Promise<McpAuthResult>;
-  getConnectionStatus: (serverName: string) => "connected" | "idle" | "failed" | "needs-auth";
+  getConnectionStatus: (serverName: string) => "connected" | "idle" | "failed" | "needs-auth" | "disabled";
+  getFailureMessage?: (serverName: string) => string | null;
   refreshCacheAfterReconnect: (serverName: string) => import("./metadata-cache.ts").ServerCacheEntry | null;
 }
 
@@ -414,7 +456,7 @@ export interface McpPanelResult {
  */
 export function getServerPrefix(
   serverName: string,
-  mode: "server" | "none" | "short"
+  mode: ToolPrefix
 ): string {
   if (mode === "none") return "";
   if (mode === "short") {
@@ -422,6 +464,7 @@ export function getServerPrefix(
     if (!short) short = "mcp";
     return short;
   }
+  if (mode === "mcp") return `mcp__${serverName.replace(/-/g, "_")}`;
   return serverName.replace(/-/g, "_");
 }
 
@@ -431,10 +474,26 @@ export function getServerPrefix(
 export function formatToolName(
   toolName: string,
   serverName: string,
-  prefix: "server" | "none" | "short"
+  prefix: ToolPrefix
 ): string {
   const p = getServerPrefix(serverName, prefix);
-  return p ? `${p}_${toolName}` : toolName;
+  const sanitized = toolName.replace(/\./g, "_");
+  return p ? `${p}_${sanitized}` : sanitized;
+}
+
+export function sanitizePromptName(name: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^[_-]+|[_-]+$/g, "");
+  if (!cleaned) return "prompt";
+  return /^[0-9]/.test(cleaned) ? `_${cleaned}` : cleaned;
+}
+
+export function formatPromptCommandName(
+  promptName: string,
+  serverName: string,
+  prefix: ToolPrefix,
+): string {
+  const serverPart = getServerPrefix(serverName, prefix) || serverName.replace(/-/g, "_") || "server";
+  return `mcp__${serverPart}__${sanitizePromptName(promptName)}`;
 }
 
 function normalizeToolName(value: string): string {
@@ -444,7 +503,7 @@ function normalizeToolName(value: string): string {
 export function isToolExcluded(
   toolName: string,
   serverName: string,
-  prefix: "server" | "none" | "short",
+  prefix: ToolPrefix,
   excludeTools?: unknown
 ): boolean {
   if (!Array.isArray(excludeTools) || excludeTools.length === 0) return false;
@@ -454,6 +513,7 @@ export function isToolExcluded(
     normalizeToolName(formatToolName(toolName, serverName, prefix)),
     normalizeToolName(formatToolName(toolName, serverName, "server")),
     normalizeToolName(formatToolName(toolName, serverName, "short")),
+    normalizeToolName(formatToolName(toolName, serverName, "mcp")),
   ]);
 
   for (const excluded of excludeTools) {

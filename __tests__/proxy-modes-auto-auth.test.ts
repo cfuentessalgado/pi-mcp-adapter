@@ -6,8 +6,12 @@ const mocks = vi.hoisted(() => ({
   lazyConnect: vi.fn(),
   updateServerMetadata: vi.fn(),
   updateMetadataCache: vi.fn(),
+  notifyToolMetadataUpdated: vi.fn(),
+  markKeepAliveAfterConnect: vi.fn(),
   getFailureAgeSeconds: vi.fn(),
   updateStatusBar: vi.fn(),
+  clearFailure: vi.fn(),
+  recordFailure: vi.fn(),
   clients: [] as any[],
   transports: [] as any[],
   connectImpl: vi.fn(),
@@ -25,11 +29,16 @@ vi.mock("../init.ts", () => ({
   lazyConnect: mocks.lazyConnect,
   updateServerMetadata: mocks.updateServerMetadata,
   updateMetadataCache: mocks.updateMetadataCache,
+  notifyToolMetadataUpdated: mocks.notifyToolMetadataUpdated,
+  markKeepAliveAfterConnect: mocks.markKeepAliveAfterConnect,
   getFailureAgeSeconds: mocks.getFailureAgeSeconds,
   updateStatusBar: mocks.updateStatusBar,
+  clearFailure: mocks.clearFailure,
+  recordFailure: mocks.recordFailure,
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   Client: vi.fn().mockImplementation(function (this: any, info: unknown, options: unknown) {
     this.info = info;
     this.options = options;
@@ -50,22 +59,16 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     this.close = vi.fn(async () => undefined);
     mocks.clients.push(this);
   }),
+  StreamableHTTPClientTransport: vi.fn(),
+  SSEClientTransport: vi.fn(),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: vi.fn().mockImplementation(function (this: any, options: unknown) {
     this.options = options;
     this.close = vi.fn(async () => undefined);
     mocks.transports.push(this);
   }),
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: vi.fn(),
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: vi.fn(),
 }));
 
 vi.mock("../npx-resolver.ts", () => ({
@@ -80,8 +83,11 @@ describe("proxy auto auth", () => {
     mocks.lazyConnect.mockReset().mockResolvedValue(false);
     mocks.updateServerMetadata.mockReset();
     mocks.updateMetadataCache.mockReset();
+    mocks.markKeepAliveAfterConnect.mockReset();
     mocks.getFailureAgeSeconds.mockReset().mockReturnValue(null);
     mocks.updateStatusBar.mockReset();
+    mocks.clearFailure.mockReset();
+    mocks.recordFailure.mockReset();
     mocks.clients.length = 0;
     mocks.transports.length = 0;
     mocks.connectImpl.mockReset().mockResolvedValue(undefined);
@@ -122,13 +128,15 @@ describe("proxy auto auth", () => {
 
     const state = {
       config: {
-        settings: { autoAuth: true, toolPrefix: "server" },
+        settings: { autoAuth: true, toolPrefix: "mcp" },
         mcpServers: {
           demo: { url: "https://api.example.com/mcp", auth: "oauth" },
         },
       },
       manager,
+      oauthRuntime: { signal: new AbortController().signal },
       toolMetadata: new Map(),
+      serverInstructions: new Map(),
       failureTracker: new Map(),
       ui: { setStatus: vi.fn() },
     } as any;
@@ -139,9 +147,14 @@ describe("proxy auto auth", () => {
       "demo",
       "https://api.example.com/mcp",
       state.config.mcpServers.demo,
+      { runtime: state.oauthRuntime },
     );
     expect(manager.close).toHaveBeenCalledWith("demo");
     expect(manager.connect).toHaveBeenCalledTimes(2);
+    expect(state.toolMetadata.get("demo")?.[0]).toMatchObject({
+      name: "mcp__demo_search",
+      originalName: "search",
+    });
     expect(result.content[0].text).toContain("demo (1 tools)");
   });
 
@@ -204,7 +217,7 @@ describe("proxy auto auth", () => {
   });
 
   it("runs URL elicitations returned by proxy tool calls", async () => {
-    const { UrlElicitationRequiredError } = await import("@modelcontextprotocol/sdk/types.js");
+    const { UrlElicitationRequiredError } = await import("@modelcontextprotocol/client");
     const { executeCall } = await import("../proxy-modes.ts");
     const error = new UrlElicitationRequiredError([{
       mode: "url",
@@ -306,6 +319,7 @@ describe("proxy auto auth", () => {
       "demo",
       "https://api.example.com/mcp",
       state.config.mcpServers.demo,
+      { signal: controller.signal },
     );
     expect(manager.connect).toHaveBeenCalledTimes(1);
     expect(manager.getRequestOptions).toHaveBeenCalledWith("demo", controller.signal);
@@ -315,10 +329,41 @@ describe("proxy auto auth", () => {
         arguments: { q: "hello" },
         _meta: undefined,
       },
-      undefined,
       { timeout: 1234 },
     );
     expect(result.content[0].text).toContain("ok");
+  });
+
+  it("rethrows proxy auto-auth cancellation", async () => {
+    const { executeCall } = await import("../proxy-modes.ts");
+    const controller = new AbortController();
+    const reason = new Error("request cancelled");
+    reason.name = "AbortError";
+    mocks.authenticate.mockRejectedValueOnce(reason);
+    const state = {
+      config: {
+        settings: { autoAuth: true, toolPrefix: "server" },
+        mcpServers: { demo: { url: "https://api.example.com/mcp", auth: "oauth" } },
+      },
+      manager: {
+        getConnection: vi.fn(() => ({ status: "needs-auth" })),
+        touch: vi.fn(),
+        incrementInFlight: vi.fn(),
+        decrementInFlight: vi.fn(),
+      },
+      toolMetadata: new Map([["demo", [{ name: "demo_search", originalName: "search", description: "Search", inputSchema: { type: "object" } }]]]),
+      failureTracker: new Map(),
+      ui: { setStatus: vi.fn() },
+      completedUiSessions: [],
+    } as any;
+
+    await expect(executeCall(state, "demo_search", {}, "demo", undefined, controller.signal)).rejects.toBe(reason);
+    expect(mocks.authenticate).toHaveBeenCalledWith(
+      "demo",
+      "https://api.example.com/mcp",
+      state.config.mcpServers.demo,
+      { signal: controller.signal },
+    );
   });
 
   it("surfaces aborted proxy tool calls via the forwarded AbortSignal", async () => {
@@ -361,11 +406,40 @@ describe("proxy auto auth", () => {
     expect(manager.getRequestOptions).toHaveBeenCalledWith("demo", controller.signal);
     expect(connection.client.callTool).toHaveBeenCalledWith(
       { name: "search", arguments: {}, _meta: undefined },
-      undefined,
       requestOptions,
     );
-    expect(result.details).toMatchObject({ error: "call_failed", message: "request aborted" });
+    expect(result.details).toMatchObject({ error: "aborted", message: "request aborted" });
     expect(result.content[0].text).toContain("request aborted");
+  });
+
+  it("preserves owner cancellation during a proxy tool call", async () => {
+    const { executeCall } = await import("../proxy-modes.ts");
+    const owner = new AbortController();
+    const connection = {
+      status: "connected",
+      client: { callTool: vi.fn(() => new Promise<never>(() => {})) },
+    };
+    const state = {
+      config: { settings: { toolPrefix: "server" }, mcpServers: { demo: { command: "demo" } } },
+      manager: {
+        getConnection: vi.fn(() => connection),
+        getRequestOptions: vi.fn((_name: string, signal?: AbortSignal) => signal ? { signal } : undefined),
+        touch: vi.fn(),
+        incrementInFlight: vi.fn(),
+        decrementInFlight: vi.fn(),
+      },
+      owner: { signal: owner.signal },
+      toolMetadata: new Map([["demo", [{ name: "demo_search", originalName: "search", description: "Search", inputSchema: { type: "object" } }]]]),
+      failureTracker: new Map(),
+      completedUiSessions: [],
+    } as any;
+
+    const inFlight = executeCall(state, "demo_search", {}, "demo");
+    await Promise.resolve();
+    owner.abort(new Error("owner stopped"));
+    const result = await inFlight;
+
+    expect(result.details).toMatchObject({ error: "aborted", message: "owner stopped" });
   });
 
   it("shares one cold connect across concurrent proxy calls and applies timeout during bootstrap", async () => {
@@ -396,7 +470,7 @@ describe("proxy auto auth", () => {
         return false;
       }
       state.toolMetadata.set(serverName, [{
-        name: "demo_search",
+        name: "mcp__demo_search",
         originalName: "search",
         description: "Search",
         inputSchema: { type: "object", properties: {} },
@@ -408,7 +482,7 @@ describe("proxy auto auth", () => {
     manager.setDefaultRequestTimeoutMs(2500);
     const state = {
       config: {
-        settings: { toolPrefix: "server" },
+        settings: { toolPrefix: "mcp" },
         mcpServers: {
           demo: { command: "node", args: ["server.js"], requestTimeoutMs: 5000 },
         },
@@ -420,8 +494,8 @@ describe("proxy auto auth", () => {
     } as any;
 
     const [first, second] = await Promise.all([
-      executeCall(state, "demo_search", { q: "one" }),
-      executeCall(state, "demo_search", { q: "two" }),
+      executeCall(state, "mcp__demo_search", { q: "one" }),
+      executeCall(state, "mcp__demo_search", { q: "two" }),
     ]);
 
     expect(mocks.clients).toHaveLength(1);
@@ -435,13 +509,11 @@ describe("proxy auto auth", () => {
     expect(client.callTool).toHaveBeenNthCalledWith(
       1,
       { name: "search", arguments: { q: "one" }, _meta: undefined },
-      undefined,
       { timeout: 5000 },
     );
     expect(client.callTool).toHaveBeenNthCalledWith(
       2,
       { name: "search", arguments: { q: "two" }, _meta: undefined },
-      undefined,
       { timeout: 5000 },
     );
     expect(first.content[0].text).toContain("ok");

@@ -1,15 +1,15 @@
 import { complete, type Api, type AssistantMessage, type Message, type Model, type TextContent } from "@earendil-works/pi-ai";
 import { truncateAtWord } from "./utils.ts";
+import { throwIfAborted } from "./abort.ts";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import {
-  CreateMessageRequestSchema,
-  type CreateMessageRequest,
-  type CreateMessageResult,
-  type ModelPreferences,
-  type SamplingMessage,
-  type SamplingMessageContentBlock,
-} from "@modelcontextprotocol/sdk/types.js";
+import type {
+  Client,
+  CreateMessageRequest,
+  CreateMessageResult,
+  ModelPreferences,
+  SamplingMessage,
+  SamplingMessageContentBlock,
+} from "@modelcontextprotocol/client";
 
 export interface SamplingHandlerOptions {
   serverName: string;
@@ -23,7 +23,7 @@ export interface SamplingHandlerOptions {
 export type ServerSamplingConfig = Omit<SamplingHandlerOptions, "serverName">;
 
 export function registerSamplingHandler(client: Client, options: SamplingHandlerOptions): void {
-  client.setRequestHandler(CreateMessageRequestSchema, (request) => {
+  client.setRequestHandler("sampling/createMessage", (request) => {
     return handleSamplingRequest(options, request as CreateMessageRequest);
   });
 }
@@ -33,6 +33,8 @@ export async function handleSamplingRequest(
   request: CreateMessageRequest,
 ): Promise<CreateMessageResult> {
   const params = request.params;
+  const signal = options.getSignal();
+  throwIfAborted(signal);
 
   if ("task" in params && params.task) {
     throw new Error("MCP sampling tasks are not supported");
@@ -52,11 +54,13 @@ export async function handleSamplingRequest(
 
   const messages = params.messages.map(convertSamplingMessage);
   const { model, apiKey, headers } = await resolveSamplingModel(options, params.modelPreferences);
+  throwIfAborted(signal);
   await confirmSampling(
     options,
     "Approve MCP sampling request",
     formatRequestApproval(options.serverName, `${model.provider}/${model.id}`, params.systemPrompt, messages),
   );
+  throwIfAborted(signal);
 
   const result = await complete(
     model,
@@ -70,11 +74,12 @@ export async function handleSamplingRequest(
       maxTokens: params.maxTokens,
       temperature: params.temperature,
       metadata: params.metadata as Record<string, unknown> | undefined,
-      signal: options.getSignal(),
+      signal,
     },
   );
 
   const converted = convertAssistantResult(result);
+  throwIfAborted(signal);
   await confirmSampling(
     options,
     "Return MCP sampling response",
@@ -145,8 +150,11 @@ async function resolveSamplingModel(
   }
 
   const errors: string[] = [];
+  const signal = options.getSignal();
   for (const model of candidates) {
+    throwIfAborted(signal);
     const auth = await options.modelRegistry.getApiKeyAndHeaders(model);
+    throwIfAborted(signal);
     if (auth.ok === false) {
       errors.push(`${model.provider}/${model.id}: ${auth.error}`);
       continue;

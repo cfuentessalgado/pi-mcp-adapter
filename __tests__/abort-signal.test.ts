@@ -31,6 +31,7 @@ function connectedState(client: Record<string, unknown>) {
         ],
       ],
     ]),
+    serverInstructions: new Map(),
     failureTracker: new Map(),
     ui: undefined,
   } as any;
@@ -67,10 +68,9 @@ describe("AbortSignal propagation", () => {
 
     const result = await inFlight;
     expect(result.content[0].text).toContain("Failed to call tool: user cancelled");
-    expect(result.details.error).toBe("call_failed");
+    expect(result.details.error).toBe("aborted");
     expect(callTool).toHaveBeenCalledWith(
       { name: "slow", arguments: {}, _meta: undefined },
-      undefined,
       { signal: controller.signal },
     );
     expect(state.manager.decrementInFlight).toHaveBeenCalledWith("demo");
@@ -87,10 +87,9 @@ describe("AbortSignal propagation", () => {
 
     const result = await inFlight;
     expect(result.content[0].text).toContain("Failed to call tool: user cancelled");
-    expect(result.details.error).toBe("call_failed");
+    expect(result.details.error).toBe("aborted");
     expect(callTool).toHaveBeenCalledWith(
       { name: "slow", arguments: {}, _meta: undefined },
-      undefined,
       { signal: controller.signal },
     );
     expect(state.manager.decrementInFlight).toHaveBeenCalledWith("demo");

@@ -3,22 +3,22 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { McpConfig, ServerEntry } from "./types.ts";
 
-async function execOpen(pi: ExtensionAPI, target: string, browser?: string) {
+async function execOpen(pi: ExtensionAPI, target: string, browser?: string, signal?: AbortSignal) {
   const os = platform();
 
   if (os === "darwin") {
-    return browser ? pi.exec("open", ["-a", browser, target]) : pi.exec("open", [target]);
+    return browser ? pi.exec("open", ["-a", browser, target], { signal }) : pi.exec("open", [target], { signal });
   }
   if (os === "win32") {
     return browser
-      ? pi.exec("cmd", ["/c", "start", "", browser, target])
-      : pi.exec("cmd", ["/c", "start", "", target]);
+      ? pi.exec("cmd", ["/c", "start", "", browser, target], { signal })
+      : pi.exec("cmd", ["/c", "start", "", target], { signal });
   }
-  return browser ? pi.exec(browser, [target]) : pi.exec("xdg-open", [target]);
+  return browser ? pi.exec(browser, [target], { signal }) : pi.exec("xdg-open", [target], { signal });
 }
 
-export async function openUrl(pi: ExtensionAPI, url: string, browser?: string): Promise<void> {
-  const result = await execOpen(pi, url, browser);
+export async function openUrl(pi: ExtensionAPI, url: string, browser?: string, signal?: AbortSignal): Promise<void> {
+  const result = await execOpen(pi, url, browser, signal);
   if (result.code !== 0) {
     throw new Error(result.stderr || `Failed to open browser (exit code ${result.code})`);
   }
@@ -62,7 +62,29 @@ export function getConfigPathFromArgv(): string | undefined {
 export function interpolateEnvVars(value: string): string {
   return value
     .replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? "")
-    .replace(/\$env:(\w+)/g, (_, name) => process.env[name] ?? "");
+    .replace(/\$env:(\w+)/g, (_, name) => process.env[name] ?? "")
+    .replace(/\{env:(\w+)\}/g, (_, name) => process.env[name] ?? "");
+}
+
+function getMissingEnvVars(value: string): string[] {
+  const missing = new Set<string>();
+  for (const match of value.matchAll(/\$\{(\w+)\}|\$env:(\w+)|\{env:(\w+)\}/g)) {
+    const name = match[1] ?? match[2] ?? match[3];
+    if (name && process.env[name] === undefined) {
+      missing.add(name);
+    }
+  }
+  return [...missing];
+}
+
+export function toStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string") result[key] = entry;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 export function interpolateEnvRecord(values: Record<string, string> | undefined): Record<string, string> | undefined {
@@ -71,6 +93,23 @@ export function interpolateEnvRecord(values: Record<string, string> | undefined)
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(values)) {
     resolved[key] = interpolateEnvVars(value);
+  }
+  return resolved;
+}
+
+export function resolveServerUrl(definition: Pick<ServerEntry, "url">): string | undefined {
+  if (definition.url === undefined) return undefined;
+
+  const missing = getMissingEnvVars(definition.url);
+  if (missing.length > 0) {
+    throw new Error(`Missing environment variable${missing.length === 1 ? "" : "s"} in MCP server URL: ${missing.join(", ")}`);
+  }
+
+  const resolved = interpolateEnvVars(definition.url);
+  try {
+    new URL(resolved);
+  } catch (error) {
+    throw new Error(`Invalid MCP server URL after environment interpolation: ${resolved}`, { cause: error });
   }
   return resolved;
 }
@@ -91,6 +130,65 @@ export function resolveBearerToken(definition: Pick<ServerEntry, "bearerToken" |
     return interpolateEnvVars(definition.bearerToken);
   }
   return definition.bearerTokenEnv ? process.env[definition.bearerTokenEnv] : undefined;
+}
+
+/** Remove OSC control strings, including payloads that have no terminator. */
+export function stripOscSequences(text: string): string {
+  let result = "";
+  let index = 0;
+  while (index < text.length) {
+    const isEscOsc = text.charCodeAt(index) === 0x1b && text[index + 1] === "]";
+    const isC1Osc = text.charCodeAt(index) === 0x9d;
+    if (!isEscOsc && !isC1Osc) {
+      result += text[index++];
+      continue;
+    }
+
+    index += isEscOsc ? 2 : 1;
+    while (index < text.length) {
+      const code = text.charCodeAt(index++);
+      if (code === 0x07 || code === 0x9c) break;
+      if (code === 0x1b && text[index] === "\\") {
+        index++;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+export function sanitizeTerminalText(text: string): string {
+  return stripOscSequences(text)
+    .replace(/(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_])/g, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function formatTerminalError(error: unknown): string {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  const collect = (value: unknown) => {
+    if (seen.has(value)) return;
+    if ((typeof value === "object" && value !== null) || typeof value === "function") seen.add(value);
+
+    if (value instanceof AggregateError) {
+      const countBefore = messages.length;
+      for (const nested of value.errors) collect(nested);
+      if (value.cause !== undefined) collect(value.cause);
+      if (messages.length === countBefore && value.message) messages.push(value.message);
+      return;
+    }
+    if (value instanceof Error) {
+      if (value.message) messages.push(value.message);
+      if (value.cause !== undefined) collect(value.cause);
+      return;
+    }
+    messages.push(String(value));
+  };
+
+  collect(error);
+  return sanitizeTerminalText([...new Set(messages)].join(": "));
 }
 
 export function truncateAtWord(text: string, target: number): string {

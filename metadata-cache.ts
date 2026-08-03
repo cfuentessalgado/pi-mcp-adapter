@@ -4,10 +4,16 @@ import { dirname } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
 import { createHash } from "node:crypto";
 import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type { McpTool, McpResource, ServerEntry, ToolMetadata } from "./types.ts";
-import { formatToolName, isToolExcluded } from "./types.ts";
+import type { McpTool, McpResource, McpPrompt, McpPromptArgument, ServerEntry, ToolMetadata, PromptMetadata } from "./types.ts";
+import { formatPromptCommandName, formatToolName, isToolExcluded, type ToolPrefix } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
-import { extractToolUiStreamMode, interpolateEnvRecord, resolveBearerToken, resolveConfigPath } from "./utils.ts";
+import {
+  extractToolUiStreamMode,
+  interpolateEnvRecord,
+  resolveBearerToken,
+  resolveConfigPath,
+  resolveServerUrl,
+} from "./utils.ts";
 
 const CACHE_VERSION = 1;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -26,10 +32,19 @@ export interface CachedResource {
   description?: string;
 }
 
+export interface CachedPrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: { name: string; description?: string; required?: boolean }[];
+}
+
 export interface ServerCacheEntry {
   configHash: string;
   tools: CachedTool[];
   resources: CachedResource[];
+  prompts?: CachedPrompt[];
+  instructions?: string;
   cachedAt: number;
 }
 
@@ -90,7 +105,7 @@ export function computeServerHash(definition: ServerEntry): string {
     args: definition.args,
     env: interpolateEnvRecord(definition.env),
     cwd: resolveConfigPath(definition.cwd),
-    url: definition.url,
+    url: resolveServerUrl(definition),
     headers: interpolateEnvRecord(definition.headers),
     auth: definition.auth,
     bearerToken: resolveBearerToken(definition),
@@ -107,7 +122,13 @@ export function isServerCacheValid(
   definition: ServerEntry,
   maxAgeMs: number = CACHE_MAX_AGE_MS
 ): boolean {
-  if (!entry || entry.configHash !== computeServerHash(definition)) return false;
+  let configHash: string;
+  try {
+    configHash = computeServerHash(definition);
+  } catch {
+    return false;
+  }
+  if (!entry || entry.configHash !== configHash) return false;
   if (!entry.cachedAt || typeof entry.cachedAt !== "number") return false;
   if (maxAgeMs > 0 && Date.now() - entry.cachedAt > maxAgeMs) return false;
   return true;
@@ -116,10 +137,11 @@ export function isServerCacheValid(
 export function reconstructToolMetadata(
   serverName: string,
   entry: ServerCacheEntry,
-  prefix: "server" | "none" | "short",
+  prefix: ToolPrefix,
   definition: Pick<ServerEntry, "exposeResources" | "excludeTools">
 ): ToolMetadata[] {
   const metadata: ToolMetadata[] = [];
+  const seenNames = new Set<string>();
 
   for (const tool of entry.tools ?? []) {
     if (!tool?.name) continue;
@@ -127,8 +149,14 @@ export function reconstructToolMetadata(
       continue;
     }
 
+    const name = formatToolName(tool.name, serverName, prefix);
+    if (seenNames.has(name)) {
+      continue;
+    }
+    seenNames.add(name);
+
     metadata.push({
-      name: formatToolName(tool.name, serverName, prefix),
+      name,
       originalName: tool.name,
       description: tool.description ?? "",
       inputSchema: tool.inputSchema,
@@ -145,8 +173,14 @@ export function reconstructToolMetadata(
         continue;
       }
 
+      const name = formatToolName(baseName, serverName, prefix);
+      if (seenNames.has(name)) {
+        continue;
+      }
+      seenNames.add(name);
+
       metadata.push({
-        name: formatToolName(baseName, serverName, prefix),
+        name,
         originalName: baseName,
         description: resource.description ?? `Read resource: ${resource.uri}`,
         resourceUri: resource.uri,
@@ -177,6 +211,47 @@ export function serializeResources(resources: McpResource[]): CachedResource[] {
       name: r.name,
       description: r.description,
     }));
+}
+
+export function serializePrompts(prompts: McpPrompt[]): CachedPrompt[] {
+  return (prompts ?? [])
+    .filter(prompt => prompt?.name)
+    .map(prompt => ({
+      name: prompt.name,
+      title: prompt.title,
+      description: prompt.description,
+      arguments: Array.isArray(prompt.arguments)
+        ? prompt.arguments.filter(argument => argument?.name).map(argument => ({
+            name: argument.name,
+            description: argument.description,
+            required: argument.required,
+          }))
+        : undefined,
+    }));
+}
+
+export function reconstructPromptMetadata(
+  serverName: string,
+  prompts: ReadonlyArray<McpPrompt | CachedPrompt>,
+  prefix: ToolPrefix,
+): PromptMetadata[] {
+  return (prompts ?? []).filter(prompt => prompt?.name).map(prompt => {
+    const args: McpPromptArgument[] = Array.isArray(prompt.arguments)
+      ? prompt.arguments.filter(argument => argument?.name).map(argument => ({
+          name: argument.name,
+          description: argument.description,
+          required: argument.required,
+        }))
+      : [];
+    return {
+      serverName,
+      originalName: prompt.name,
+      commandName: formatPromptCommandName(prompt.name, serverName, prefix),
+      title: prompt.title,
+      description: prompt.description ?? "",
+      arguments: args,
+    };
+  });
 }
 
 function stableStringify(value: unknown): string {

@@ -1,6 +1,6 @@
 # Interactive Visualizer Example
 
-A minimal MCP server example for this Pi MCP adapter that demonstrates:
+A minimal MCP server example for `pi-mcp-adapter` that demonstrates:
 
 1. **Charts** — Renders bar, line, pie, and doughnut charts via Chart.js
 2. **Bidirectional communication** — Send messages from the UI back to the agent
