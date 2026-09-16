@@ -9,6 +9,8 @@ vi.mock("../mcp-auth-flow.ts", () => ({
   authenticate: mocks.authenticate,
   removeAuth: mocks.removeAuth,
   supportsOAuth: (definition: { url?: string; auth?: string }) => Boolean(definition.url) && definition.auth !== "bearer",
+  formatAuthorizationUrlMessage: (serverName: string, authorizationUrl: string) =>
+    `Open this URL to authenticate ${serverName}:\n\n${authorizationUrl}\n\nAfter approving, return to Pi; the local callback will complete automatically.`,
 }));
 
 vi.mock("../init.ts", () => ({
@@ -44,6 +46,69 @@ describe("authenticateServer", () => {
     expect(ui.notify).toHaveBeenCalledWith(
       expect.stringContaining(authorizationUrl),
       "info",
+    );
+  });
+
+  it("prompts Open/Skip when the prompt option is enabled", async () => {
+    const authorizationUrl = "https://auth.example.com/authorize";
+    mocks.authenticate.mockImplementationOnce(async (_name, _url, _definition, options) => {
+      await options.onAuthorizationUrl(authorizationUrl);
+      return "authenticated";
+    });
+    const ui = { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn().mockResolvedValue("Open") };
+    const { authenticateServer } = await import("../commands.ts");
+
+    const result = await authenticateServer("sentry", {
+      mcpServers: {
+        sentry: { url: "https://mcp.sentry.dev/mcp", auth: "oauth" },
+      },
+    }, { hasUI: true, ui } as any, { prompt: true });
+
+    expect(result.ok).toBe(true);
+    expect(ui.select).toHaveBeenCalledWith(
+      expect.stringContaining(authorizationUrl),
+      ["Open", "Skip (open it manually)"],
+    );
+  });
+
+  it("returns false from onAuthorizationUrl when the user skips the browser", async () => {
+    const authorizationUrl = "https://auth.example.com/authorize";
+    mocks.authenticate.mockImplementationOnce(async (_name, _url, _definition, options) => {
+      const decision = await options.onAuthorizationUrl(authorizationUrl);
+      expect(decision).toBe(false);
+      return "authenticated";
+    });
+    const ui = { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn().mockResolvedValue("Skip (open it manually)") };
+    const { authenticateServer } = await import("../commands.ts");
+
+    const result = await authenticateServer("sentry", {
+      mcpServers: {
+        sentry: { url: "https://mcp.sentry.dev/mcp", auth: "oauth" },
+      },
+    }, { hasUI: true, ui } as any, { prompt: true });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("cancels authentication when the prompt is dismissed", async () => {
+    const authorizationUrl = "https://auth.example.com/authorize";
+    mocks.authenticate.mockImplementationOnce(async (_name, _url, _definition, options) => {
+      await options.onAuthorizationUrl(authorizationUrl);
+      return "authenticated";
+    });
+    const ui = { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn().mockResolvedValue(undefined) };
+    const { authenticateServer } = await import("../commands.ts");
+
+    const result = await authenticateServer("sentry", {
+      mcpServers: {
+        sentry: { url: "https://mcp.sentry.dev/mcp", auth: "oauth" },
+      },
+    }, { hasUI: true, ui } as any, { prompt: true });
+
+    expect(result.ok).toBe(false);
+    expect(ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Authentication cancelled"),
+      "warning",
     );
   });
 });

@@ -488,6 +488,75 @@ describe("mcp-auth-flow explicit auth", () => {
     }));
   });
 
+  it("extracts the callback endpoint from the authorization URL redirect_uri", async () => {
+    const { extractCallbackEndpoint } = await import("../mcp-auth-flow.ts");
+
+    expect(extractCallbackEndpoint(
+      "https://auth.example.com/authorize?redirect_uri=" + encodeURIComponent("http://localhost:19876/callback"),
+    )).toEqual({ host: "localhost", port: 19876, path: "/callback" });
+    expect(extractCallbackEndpoint("https://auth.example.com/authorize")).toBeUndefined();
+    expect(extractCallbackEndpoint("not a url")).toBeUndefined();
+  });
+
+  it("formats the authorization URL notice with callback endpoint and tunnel hint", async () => {
+    const { formatAuthorizationUrlMessage } = await import("../mcp-auth-flow.ts");
+
+    const withEndpoint = formatAuthorizationUrlMessage(
+      "svc",
+      "https://auth.example.com/authorize?redirect_uri=" + encodeURIComponent("http://localhost:19876/callback"),
+    );
+    expect(withEndpoint).toContain("Open this URL to authenticate svc:");
+    expect(withEndpoint).toContain("Callback endpoint: http://localhost:19876/callback");
+    expect(withEndpoint).toContain("ssh -L 19876:localhost:19876 <remote-host>");
+
+    const withoutEndpoint = formatAuthorizationUrlMessage("svc", "https://auth.example.com/authorize");
+    expect(withoutEndpoint).toContain("local callback will complete automatically");
+  });
+
+  it("skips opening the browser when onAuthorizationUrl returns false", async () => {
+    const authorizationUrl = "https://auth.example.com/authorize?redirect_uri=" + encodeURIComponent("http://localhost:19876/callback");
+    mocks.sdkAuth.mockImplementationOnce(async (provider) => {
+      await provider.redirectToAuthorization(new URL(authorizationUrl));
+      return "REDIRECT";
+    });
+    mocks.waitForCallback.mockResolvedValueOnce("manual-code");
+    const onAuthorizationUrl = vi.fn().mockResolvedValue(false);
+    const { authenticate } = await import("../mcp-auth-flow.ts");
+
+    await expect(authenticate("skip-browser", "https://api.example.com/mcp", {
+      url: "https://api.example.com/mcp",
+      auth: "oauth",
+    }, { onAuthorizationUrl })).resolves.toBe("authenticated");
+
+    expect(onAuthorizationUrl).toHaveBeenCalledWith(authorizationUrl);
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.finishAuth).toHaveBeenCalledWith("manual-code");
+  });
+
+  it("uses the formatted notice in the console fallback", async () => {
+    mocks.sdkAuth.mockImplementationOnce(async (provider) => {
+      await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
+      return "REDIRECT";
+    });
+    mocks.waitForCallback.mockResolvedValueOnce("manual-code");
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const { authenticate } = await import("../mcp-auth-flow.ts");
+
+    let logCalls: string[] = [];
+    try {
+      await expect(authenticate("console-fallback", "https://api.example.com/mcp", {
+        url: "https://api.example.com/mcp",
+        auth: "oauth",
+      })).resolves.toBe("authenticated");
+      logCalls = consoleLog.mock.calls.map((args) => String(args[0]));
+    } finally {
+      consoleLog.mockRestore();
+    }
+
+    expect(logCalls.some((call) => call.includes("Open this URL to authenticate console-fallback"))).toBe(true);
+    expect(mocks.open).toHaveBeenCalledWith("https://auth.example.com/authorize");
+  });
+
   it("continues waiting for the OAuth callback when the browser cannot open", async () => {
     mocks.sdkAuth.mockImplementationOnce(async (provider) => {
       await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));

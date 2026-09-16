@@ -133,7 +133,13 @@ When Pi runs over SSH or in a headless environment, use the proxy tool to retrie
 mcp({ action: "auth-start", server: "my-oauth-server" })
 ```
 
-Open the returned URL in your local browser. After approval, copy the full redirected localhost URL from the browser address bar (the page may fail to load locally) and complete the same pending auth flow:
+Open the returned URL in your local browser. The response also names the callback endpoint (`host:port/path`) so you can forward it from a remote machine, for example:
+
+```
+ssh -L 19876:localhost:19876 <remote-host>
+```
+
+After approval, copy the full redirected localhost URL from the browser address bar (the page may fail to load locally) and complete the same pending auth flow:
 
 ```
 mcp({

@@ -15,7 +15,7 @@ import {
 import { lazyConnect, updateMetadataCache, updateStatusBar, getFailureAgeSeconds } from "./init.ts";
 import { loadMetadataCache } from "./metadata-cache.ts";
 import { buildToolMetadata } from "./tool-metadata.ts";
-import { supportsOAuth, authenticate, removeAuth } from "./mcp-auth-flow.ts";
+import { supportsOAuth, authenticate, removeAuth, formatAuthorizationUrlMessage } from "./mcp-auth-flow.ts";
 import { getAuthForUrl } from "./mcp-auth.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
 import { openPath } from "./utils.ts";
@@ -136,10 +136,16 @@ export async function reconnectServers(
   updateStatusBar(state);
 }
 
+export interface AuthenticateServerOptions {
+  /** Ask Open/Skip before launching the browser. Only safe outside custom TUI panels. */
+  prompt?: boolean
+}
+
 export async function authenticateServer(
   serverName: string,
   config: McpConfig,
-  ctx: ExtensionContext
+  ctx: ExtensionContext,
+  options: AuthenticateServerOptions = {}
 ): Promise<McpAuthResult> {
   if (!ctx.hasUI) return { ok: false, message: "OAuth authentication requires an interactive session." };
 
@@ -169,12 +175,28 @@ export async function authenticateServer(
   try {
     ctx.ui.setStatus("mcp-auth", `Authenticating ${serverName}...`);
     const status = await authenticate(serverName, definition.url, definition, {
-      onAuthorizationUrl: (authorizationUrl) => {
+      onAuthorizationUrl: async (authorizationUrl): Promise<false | void> => {
         ctx.ui.notify(
-          `Open this URL to authenticate ${serverName}:\n\n${authorizationUrl}\n\n` +
-          "After approving, return to Pi; the local callback will complete automatically.",
+          formatAuthorizationUrlMessage(serverName, authorizationUrl),
           "info"
         );
+        if (options.prompt !== true) return;
+        const decision = await ctx.ui.select(
+          [
+            `MCP OAuth for ${serverName}`,
+            "",
+            authorizationUrl,
+            "",
+            "Open this URL in your local browser now?",
+          ].join("\n"),
+          ["Open", "Skip (open it manually)"]
+        );
+        if (decision === undefined) {
+          throw new Error("Authentication cancelled");
+        }
+        if (decision !== "Open") {
+          return false;
+        }
       },
     });
 
@@ -193,6 +215,10 @@ export async function authenticateServer(
     return { ok: false, message };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message === "Authentication cancelled") {
+      ctx.ui.notify(`Authentication cancelled for "${serverName}".`, "warning");
+      return { ok: false, message: `Authentication cancelled for "${serverName}".` };
+    }
     ctx.ui.notify(`Failed to authenticate "${serverName}": ${message}`, "error");
     return { ok: false, message };
   } finally {

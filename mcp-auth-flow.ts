@@ -37,7 +37,66 @@ import type { ServerEntry } from "./types.ts"
 export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
 
 export interface AuthenticateOptions {
-  onAuthorizationUrl?: (authorizationUrl: string) => void | Promise<void>
+  /**
+   * Called with the authorization URL before the browser opens.
+   * Return false to skip opening the browser; the callback server keeps waiting.
+   */
+  onAuthorizationUrl?: (authorizationUrl: string) => false | void | Promise<false | void>
+}
+
+/** Local callback endpoint for an OAuth flow */
+export interface OAuthCallbackEndpoint {
+  host: string
+  port: number
+  path: string
+}
+
+/**
+ * Extract the local callback endpoint from the redirect_uri parameter
+ * of an authorization URL. Returns undefined when redirect_uri is absent
+ * or not a valid loopback URL with an explicit port.
+ */
+export function extractCallbackEndpoint(authorizationUrl: string): OAuthCallbackEndpoint | undefined {
+  try {
+    const url = new URL(authorizationUrl)
+    const redirectUri = url.searchParams.get("redirect_uri")
+    if (!redirectUri) return undefined
+    const redirect = new URL(redirectUri)
+    const port = Number.parseInt(redirect.port, 10)
+    if (!Number.isInteger(port) || port <= 0) return undefined
+    return { host: redirect.hostname, port, path: redirect.pathname || "/" }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Build a user-facing notice for an authorization URL.
+ * Shows the URL plus the local callback endpoint so users on remote machines
+ * can copy the URL and tunnel the callback port.
+ */
+export function formatAuthorizationUrlMessage(serverName: string, authorizationUrl: string): string {
+  const lines: string[] = [
+    `Open this URL to authenticate ${serverName}:`,
+    "",
+    authorizationUrl,
+  ]
+
+  const endpoint = extractCallbackEndpoint(authorizationUrl)
+  if (endpoint) {
+    lines.push(
+      "",
+      `Callback endpoint: http://${endpoint.host}:${endpoint.port}${endpoint.path}`,
+      "If Pi runs on a remote machine, forward that port first, e.g.:",
+      `ssh -L ${endpoint.port}:localhost:${endpoint.port} <remote-host>`,
+      "",
+      "After approving, the local callback completes the flow automatically.",
+    )
+  } else {
+    lines.push("", "After approving, return to Pi; the local callback will complete automatically.")
+  }
+
+  return lines.join("\n")
 }
 
 // Track pending transports for auth completion
@@ -402,17 +461,21 @@ export async function authenticate(
     const callbackPromise = waitForCallback(oauthState)
 
     try {
-      // Open browser. Always surface the URL first so remote/headless users can copy it
-      // even when the OS browser handoff is unavailable or invisible.
+      // Surface the URL first so remote/headless users can copy it even when
+      // the OS browser handoff is unavailable or invisible.
+      let openBrowser = true
       if (options.onAuthorizationUrl) {
-        await options.onAuthorizationUrl(authorizationUrl)
+        const decision = await options.onAuthorizationUrl(authorizationUrl)
+        if (decision === false) openBrowser = false
       } else {
-        console.log(`MCP Auth: Open this URL to authenticate ${serverName}:\n${authorizationUrl}`)
+        console.log(`MCP Auth: ${formatAuthorizationUrlMessage(serverName, authorizationUrl)}`)
       }
-      try {
-        await open(authorizationUrl)
-      } catch (error) {
-        console.warn(`MCP Auth: Failed to open browser for ${serverName}; waiting for manual callback`, { error })
+      if (openBrowser) {
+        try {
+          await open(authorizationUrl)
+        } catch (error) {
+          console.warn(`MCP Auth: Failed to open browser for ${serverName}; waiting for manual callback`, { error })
+        }
       }
 
       // Wait for callback
