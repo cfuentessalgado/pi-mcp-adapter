@@ -71,6 +71,13 @@ export function extractCallbackEndpoint(authorizationUrl: string): OAuthCallback
 }
 
 /**
+ * Check whether a callback host is a loopback address.
+ */
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]"
+}
+
+/**
  * Build a user-facing notice for an authorization URL.
  * Shows the URL plus the local callback endpoint so users on remote machines
  * can copy the URL and tunnel the callback port.
@@ -87,11 +94,14 @@ export function formatAuthorizationUrlMessage(serverName: string, authorizationU
     lines.push(
       "",
       `Callback endpoint: http://${endpoint.host}:${endpoint.port}${endpoint.path}`,
-      "If Pi runs on a remote machine, forward that port first, e.g.:",
-      `ssh -L ${endpoint.port}:localhost:${endpoint.port} <remote-host>`,
-      "",
-      "After approving, the local callback completes the flow automatically.",
     )
+    if (isLoopbackHost(endpoint.host)) {
+      lines.push(
+        "If Pi runs on a remote machine, forward that port first, e.g.:",
+        `ssh -L ${endpoint.port}:localhost:${endpoint.port} <remote-host>`,
+      )
+    }
+    lines.push("", "After approving, the local callback completes the flow automatically.")
   } else {
     lines.push("", "After approving, return to Pi; the local callback will complete automatically.")
   }
@@ -174,9 +184,8 @@ function parseOAuthRedirectUri(redirectUri: string): { port: number; callbackHos
   }
 
   const hostname = url.hostname.toLowerCase()
-  const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1"
-  if (url.protocol !== "http:" || !isLocalhost) {
-    throw new Error("OAuth redirectUri must be an http:// localhost or loopback URI")
+  if (url.protocol !== "http:") {
+    throw new Error("OAuth redirectUri must be an http:// URI")
   }
 
   if (url.username || url.password) {
@@ -196,7 +205,7 @@ function parseOAuthRedirectUri(redirectUri: string): { port: number; callbackHos
     throw new Error("OAuth redirectUri must include an explicit numeric port")
   }
 
-  const callbackHost = hostname === "[::1]" ? "::1" : hostname
+  const callbackHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
   return { port, callbackHost, callbackPath: url.pathname }
 }
 

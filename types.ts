@@ -396,10 +396,23 @@ export interface McpAuthResult {
   message?: string;
 }
 
+/** Local callback endpoint for an OAuth flow */
+export interface OAuthCallbackEndpoint {
+  host: string;
+  port: number;
+  path: string;
+}
+
+/**
+ * Called when an OAuth authorization URL is ready so callers can display it
+ * inside their own UI (for example the MCP panel).
+ */
+export type AuthUrlDisplay = (authorizationUrl: string, endpoint: OAuthCallbackEndpoint | null) => void;
+
 export interface McpPanelCallbacks {
   reconnect: (serverName: string) => Promise<boolean>;
   canAuthenticate: (serverName: string) => boolean;
-  authenticate: (serverName: string) => Promise<McpAuthResult>;
+  authenticate: (serverName: string, onAuthorizationUrl?: AuthUrlDisplay) => Promise<McpAuthResult>;
   getConnectionStatus: (serverName: string) => "connected" | "idle" | "failed" | "needs-auth";
   refreshCacheAfterReconnect: (serverName: string) => import("./metadata-cache.ts").ServerCacheEntry | null;
 }

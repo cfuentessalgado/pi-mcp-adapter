@@ -58,7 +58,7 @@ describe("mcp-panel auth actions", () => {
     panel.handleInput("\r");
     await Promise.resolve();
 
-    expect(callbacks.authenticate).toHaveBeenCalledWith("github");
+    expect(callbacks.authenticate).toHaveBeenCalledWith("github", expect.any(Function));
     const output = stripAnsi(panel.render(100).join("\n"));
     expect(output).toContain("OAuth finished for github");
     panel.dispose();
@@ -76,7 +76,42 @@ describe("mcp-panel auth actions", () => {
     panel.handleInput("\x01");
     await Promise.resolve();
 
-    expect(callbacks.authenticate).toHaveBeenCalledWith("github");
+    expect(callbacks.authenticate).toHaveBeenCalledWith("github", expect.any(Function));
+    panel.dispose();
+  });
+
+  it("displays the authorization URL inside the panel when auth starts", async () => {
+    const config: McpConfig = {
+      mcpServers: {
+        github: { url: "https://api.githubcopilot.com/mcp", auth: "oauth" },
+      },
+    };
+    const callbacks = createCallbacks("needs-auth");
+    const authenticate = callbacks.authenticate as ReturnType<typeof vi.fn>;
+    const pending = deferred<{ ok: boolean; message?: string }>();
+    authenticate.mockImplementation(async (_serverName: string, onAuthorizationUrl?: (url: string, endpoint: unknown) => void) => {
+      onAuthorizationUrl?.(
+        "https://auth.example.com/authorize?redirect_uri=" + encodeURIComponent("http://localhost:19876/callback"),
+        { host: "localhost", port: 19876, path: "/callback" },
+      );
+      return pending.promise;
+    });
+    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {});
+
+    panel.handleInput("\r");
+    await Promise.resolve();
+
+    const output = stripAnsi(panel.render(100).join("\n"));
+    expect(output).toContain("OAuth: click or copy this URL:");
+    expect(output).toContain("Callback endpoint: http://localhost:19876/callback");
+    expect(output).toContain("ssh -L 19876:localhost:19876");
+
+    pending.resolve({ ok: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    const finished = stripAnsi(panel.render(100).join("\n"));
+    expect(finished).not.toContain("OAuth: click or copy this URL:");
+    expect(finished).toContain("OAuth finished for github");
     panel.dispose();
   });
 

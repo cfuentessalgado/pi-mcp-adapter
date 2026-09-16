@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { McpExtensionState } from "./state.ts";
-import type { McpAuthResult, McpConfig, ServerEntry, McpPanelCallbacks, McpPanelResult, ImportKind } from "./types.ts";
+import type { McpAuthResult, McpConfig, ServerEntry, McpPanelCallbacks, McpPanelResult, ImportKind, AuthUrlDisplay } from "./types.ts";
 import {
   ensureCompatibilityImports,
   getMcpDiscoverySummary,
@@ -15,7 +15,7 @@ import {
 import { lazyConnect, updateMetadataCache, updateStatusBar, getFailureAgeSeconds } from "./init.ts";
 import { loadMetadataCache } from "./metadata-cache.ts";
 import { buildToolMetadata } from "./tool-metadata.ts";
-import { supportsOAuth, authenticate, removeAuth, formatAuthorizationUrlMessage } from "./mcp-auth-flow.ts";
+import { supportsOAuth, authenticate, removeAuth, formatAuthorizationUrlMessage, extractCallbackEndpoint } from "./mcp-auth-flow.ts";
 import { getAuthForUrl } from "./mcp-auth.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
 import { openPath } from "./utils.ts";
@@ -139,6 +139,8 @@ export async function reconnectServers(
 export interface AuthenticateServerOptions {
   /** Ask Open/Skip before launching the browser. Only safe outside custom TUI panels. */
   prompt?: boolean
+  /** Receive the authorization URL and callback endpoint for custom display (e.g. panel). */
+  displayAuthUrl?: AuthUrlDisplay
 }
 
 export async function authenticateServer(
@@ -180,6 +182,7 @@ export async function authenticateServer(
           formatAuthorizationUrlMessage(serverName, authorizationUrl),
           "info"
         );
+        options.displayAuthUrl?.(authorizationUrl, extractCallbackEndpoint(authorizationUrl) ?? null);
         if (options.prompt !== true) return;
         const decision = await ctx.ui.select(
           [
@@ -342,7 +345,8 @@ function buildMcpPanelCallbacks(
       const definition = config.mcpServers[serverName];
       return definition ? supportsOAuth(definition) : false;
     },
-    authenticate: (serverName: string) => authenticateServer(serverName, config, ctx),
+    authenticate: (serverName: string, onAuthorizationUrl?: AuthUrlDisplay) =>
+      authenticateServer(serverName, config, ctx, { displayAuthUrl: onAuthorizationUrl }),
     getConnectionStatus: (serverName: string) => {
       const definition = config.mcpServers[serverName];
       const connection = state.manager.getConnection(serverName);

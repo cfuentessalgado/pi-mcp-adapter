@@ -8,9 +8,12 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http"
 import {
   DEFAULT_OAUTH_CALLBACK_PATH,
+  getConfiguredOAuthCallbackHost,
   getConfiguredOAuthCallbackPort,
+  getOAuthCallbackHost,
   getOAuthCallbackPath,
   getOAuthCallbackPort,
+  setOAuthCallbackHost,
   setOAuthCallbackPath,
   setOAuthCallbackPort,
 } from "./mcp-oauth-provider.ts"
@@ -92,7 +95,7 @@ interface EnsureCallbackServerOptions {
 }
 
 const DEFAULT_OAUTH_CALLBACK_HOST = "localhost"
-let callbackServerHost = DEFAULT_OAUTH_CALLBACK_HOST
+let callbackServerHost = getConfiguredOAuthCallbackHost()
 
 /**
  * Handle incoming HTTP requests to the callback server.
@@ -194,7 +197,12 @@ export async function ensureCallbackServer(options: EnsureCallbackServerOptions 
 async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions = {}): Promise<void> {
   const requiredPort = options.port ?? getConfiguredOAuthCallbackPort()
   const strictPort = options.strictPort === true
-  const requestedHost = options.callbackHost ?? DEFAULT_OAUTH_CALLBACK_HOST
+  // Explicit MCP_OAUTH_CALLBACK_HOST wins over the redirectUri-derived host;
+  // otherwise the redirectUri host (when set) or localhost is used.
+  const configuredHost = getConfiguredOAuthCallbackHost()
+  const requestedHost = configuredHost !== DEFAULT_OAUTH_CALLBACK_HOST
+    ? configuredHost
+    : (options.callbackHost ?? configuredHost)
   const rawRequestedPath = options.callbackPath ?? DEFAULT_OAUTH_CALLBACK_PATH
   const requestedPath = rawRequestedPath.startsWith("/") ? rawRequestedPath : `/${rawRequestedPath}`
   if (options.reserveState && !options.oauthState) {
@@ -262,6 +270,7 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
     }
 
     callbackServerHost = requestedHost
+    setOAuthCallbackHost(requestedHost)
     setOAuthCallbackPath(requestedPath)
     server = candidateServer
     if (options.reserveState && options.oauthState) {
@@ -342,7 +351,8 @@ export async function stopCallbackServer(): Promise<void> {
   }
 
   setOAuthCallbackPort(getConfiguredOAuthCallbackPort())
-  callbackServerHost = DEFAULT_OAUTH_CALLBACK_HOST
+  setOAuthCallbackHost(getConfiguredOAuthCallbackHost())
+  callbackServerHost = getConfiguredOAuthCallbackHost()
   setOAuthCallbackPath(DEFAULT_OAUTH_CALLBACK_PATH)
 
   // Reject all pending auths (defer to allow any pending operations to complete)

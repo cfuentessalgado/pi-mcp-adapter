@@ -172,14 +172,13 @@ describe("mcp-auth-flow", () => {
       )
     })
 
-    it("should reject non-local OAuth redirectUri values", async () => {
-      await assert.rejects(
+    it("accepts non-local OAuth redirectUri hosts (e.g. tailscale names)", async () => {
+      await assert.doesNotReject(
         async () => await startAuth("remote-redirect", "https://api.example.com/mcp", {
           url: "https://api.example.com/mcp",
           auth: "oauth",
-          oauth: { redirectUri: "https://example.com:3118/callback" },
-        }),
-        /localhost or loopback/
+          oauth: { redirectUri: "http://myhost.tailnet.ts.net:3118/callback" },
+        })
       )
     })
 

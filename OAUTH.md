@@ -75,11 +75,13 @@ You can optionally provide a pre-registered client:
 - `oauth.clientId` - Pre-registered client ID (optional, SDK tries dynamic registration if not provided)
 - `oauth.clientSecret` - Client secret for confidential clients (optional)
 - `oauth.scope` - Requested OAuth scopes (optional)
-- `oauth.redirectUri` - Exact browser callback URI to advertise and bind, such as `http://localhost:3118/callback` (optional)
+- `oauth.redirectUri` - Exact authorization-code callback URI to advertise and bind, such as `http://localhost:3118/callback` (optional). Must use `http://` with an explicit numeric port and no fragment or credentials. The host may be any name the machine can bind or resolve: loopback (`localhost`, `127.0.0.1`, `[::1]`), a LAN or tailscale hostname, or `0.0.0.0` combined with `MCP_OAUTH_CALLBACK_HOST`
 - `oauth.clientName` - Client display name used for dynamic registration (optional, defaults to `Pi Coding Agent`)
 - `oauth.clientUri` - Client homepage URI used for dynamic registration (optional)
 
-Dynamic clients normally omit `oauth.redirectUri`; the adapter starts the callback server lazily on the default loopback host (`localhost`) and asks the OS for an available local port when auth begins. Use `oauth.redirectUri` when the provider requires a pre-registered callback, such as Slack MCP's Claude-compatible `http://localhost:3118/callback`. The URI must use `http://` with `localhost`, `127.0.0.1`, or `[::1]`, include an explicit port, and its host/path become the bound callback endpoint.
+Dynamic clients normally omit `oauth.redirectUri`; the adapter starts the callback server lazily on `localhost` and asks the OS for an available local port when auth begins. Use `oauth.redirectUri` when the provider requires a pre-registered callback, such as Slack MCP's Claude-compatible `http://localhost:3118/callback`. The URI must use `http://`, include an explicit port, and its host/path become the bound callback endpoint.
+
+Set `MCP_OAUTH_CALLBACK_HOST` to bind the callback server to a different interface, for example `0.0.0.0` (all IPv4 interfaces) or a tailscale address. This host only controls local binding; the advertised `redirect_uri` stays loopback-based unless you set `oauth.redirectUri` explicitly.
 
 ### Non-Interactive `client_credentials`
 
@@ -138,6 +140,8 @@ Open the returned URL in your local browser. The response also names the callbac
 ```
 ssh -L 19876:localhost:19876 <remote-host>
 ```
+
+The `/mcp` panel and `/mcp-auth` command show the same URL and callback endpoint while auth runs. In the panel the URL is wrapped as a clickable OSC 8 hyperlink and an `ssh -L` hint appears for loopback endpoints. `/mcp-auth` asks Open / Skip before launching the browser; Skip keeps the flow alive so you can tunnel the port first. Bind a non-loopback interface with `MCP_OAUTH_CALLBACK_HOST` (for example `0.0.0.0` or a tailscale address) when a tunnel is not what you want.
 
 After approval, copy the full redirected localhost URL from the browser address bar (the page may fail to load locally) and complete the same pending auth flow:
 
@@ -221,7 +225,7 @@ A Node.js HTTP server runs on a loopback callback endpoint and handles the activ
 
 - Dynamic registration starts the callback server only when auth begins, binds the default host `localhost`, and asks the OS for an available local port
 - Pre-registered clients (`oauth.clientId`) without `oauth.redirectUri` require the exact configured callback port from `MCP_OAUTH_CALLBACK_PORT` or the default `19876` on `localhost`
-- `oauth.redirectUri` binds the exact loopback host, port, and path from that URI and advertises the same URI to the provider
+- `oauth.redirectUri` binds the exact host, port, and path from that URI and advertises the same URI to the provider; set `MCP_OAUTH_CALLBACK_HOST` to bind a different interface than the advertised host
 
 - Handles `code`, `state`, and `error` parameters
 - Displays success/error HTML pages

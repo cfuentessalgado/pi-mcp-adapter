@@ -111,12 +111,12 @@ describe("mcp-panel custom keybindings", () => {
     panel.handleInput(CTRL_N);
     panel.handleInput(ENTER);
     await Promise.resolve();
-    expect(callbacks.authenticate).toHaveBeenLastCalledWith("beta");
+    expect(callbacks.authenticate).toHaveBeenLastCalledWith("beta", expect.any(Function));
 
     panel.handleInput(CTRL_P);
     panel.handleInput(ENTER);
     await Promise.resolve();
-    expect(callbacks.authenticate).toHaveBeenLastCalledWith("alpha");
+    expect(callbacks.authenticate).toHaveBeenLastCalledWith("alpha", expect.any(Function));
     panel.dispose();
   });
 
@@ -135,7 +135,7 @@ describe("mcp-panel custom keybindings", () => {
     panel.handleInput(DOWN);
     panel.handleInput(ENTER);
     await Promise.resolve();
-    expect(callbacks.authenticate).toHaveBeenLastCalledWith("beta");
+    expect(callbacks.authenticate).toHaveBeenLastCalledWith("beta", expect.any(Function));
     panel.dispose();
   });
 
@@ -155,7 +155,7 @@ describe("mcp-panel custom keybindings", () => {
     panel.handleInput(ENTER);
     await Promise.resolve();
     // Cursor did not move: still authenticates the first server.
-    expect(callbacks.authenticate).toHaveBeenLastCalledWith("alpha");
+    expect(callbacks.authenticate).toHaveBeenLastCalledWith("alpha", expect.any(Function));
     panel.dispose();
   });
 });

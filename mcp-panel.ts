@@ -1,7 +1,7 @@
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { createPanelKeys, type PanelKeybindings, type PanelKeys } from "./panel-keys.ts";
 import { isToolExcluded } from "./types.ts";
-import type { McpConfig, McpPanelCallbacks, McpPanelResult, ServerProvenance } from "./types.ts";
+import type { McpConfig, McpPanelCallbacks, McpPanelResult, OAuthCallbackEndpoint, ServerProvenance } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import type { MetadataCache, ServerCacheEntry, CachedTool } from "./metadata-cache.ts";
 
@@ -90,6 +90,10 @@ function sanitizeRowContent(content: string): string {
     const rest = content.slice(i);
     const osc = rest.match(/^(?:\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x9d[\s\S]*?(?:\x07|\x1b\\|\x9c))/);
     if (osc) {
+      // Keep OSC 8 hyperlink sequences so auth URLs stay clickable in the panel.
+      if (osc[0].startsWith("\x1b]8;")) {
+        result += osc[0];
+      }
       i += osc[0].length - 1;
       continue;
     }
@@ -163,6 +167,8 @@ class McpPanel {
   private discardSelected = 1;
   private importNotice: string | null = null;
   private authNotice: string | null = null;
+  private authUrl: string | null = null;
+  private authEndpoint: OAuthCallbackEndpoint | null = null;
   private authInFlight: string | null = null;
   private inactivityTimeout: ReturnType<typeof setTimeout> | null = null;
   private visibleItems: VisibleItem[] = [];
@@ -508,6 +514,38 @@ class McpPanel {
     this.authenticateServer(this.servers[item.serverIndex]);
   }
 
+  /** Strip control characters from an auth URL before display. */
+  private static sanitizeAuthUrl(url: string): string {
+    return url
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  }
+
+  /**
+   * Build the in-panel auth URL display: header, the URL wrapped across rows
+   * as OSC 8 hyperlinks (clickable in supporting terminals), and the callback
+   * endpoint with a tunnel hint for loopback bindings.
+   */
+  private renderAuthUrlLines(innerW: number): string[] {
+    const url = McpPanel.sanitizeAuthUrl(this.authUrl ?? "");
+    if (!url) return [];
+
+    const chunkWidth = Math.max(16, innerW - 2);
+    const lines: string[] = ["\x1b[3mOAuth: click or copy this URL:\x1b[23m"];
+    for (let i = 0; i < url.length; i += chunkWidth) {
+      const chunk = url.slice(i, i + chunkWidth);
+      // OSC 8 hyperlink (BEL-terminated) makes each chunk clickable.
+      lines.push(`\x1b]8;;${url}\x07\x1b[4m${chunk}\x1b[24m\x1b]8;;\x07`);
+    }
+    if (this.authEndpoint) {
+      lines.push(`\x1b[3mCallback endpoint: http://${this.authEndpoint.host}:${this.authEndpoint.port}${this.authEndpoint.path}\x1b[23m`);
+      if (this.authEndpoint.host === "localhost" || this.authEndpoint.host === "127.0.0.1" || this.authEndpoint.host === "::1") {
+        lines.push(`\x1b[3mRemote machine? ssh -L ${this.authEndpoint.port}:localhost:${this.authEndpoint.port} <remote-host>\x1b[23m`);
+      }
+    }
+    return lines;
+  }
+
   private authenticateServer(server: ServerState): void {
     if (this.authInFlight) return;
     const serverName = sanitizeDisplayText(server.name);
@@ -518,10 +556,22 @@ class McpPanel {
 
     this.authInFlight = server.name;
     this.authNotice = `Authenticating ${serverName}...`;
+    this.authUrl = null;
+    this.authEndpoint = null;
     this.tui.requestRender();
 
-    this.callbacks.authenticate(server.name).then((result) => {
+    const clearAuthDisplay = () => {
+      this.authUrl = null;
+      this.authEndpoint = null;
+    };
+
+    this.callbacks.authenticate(server.name, (authorizationUrl, endpoint) => {
+      this.authUrl = authorizationUrl;
+      this.authEndpoint = endpoint;
+      this.tui.requestRender();
+    }).then((result) => {
       server.connectionStatus = this.callbacks.getConnectionStatus(server.name);
+      clearAuthDisplay();
       const message = sanitizeDisplayText(result.message);
       this.authNotice = result.ok
         ? `OAuth finished for ${serverName}. Run reconnect if it is still idle.`
@@ -531,6 +581,7 @@ class McpPanel {
     }).catch((error) => {
       const message = sanitizeDisplayText(error instanceof Error ? error.message : String(error));
       server.connectionStatus = this.callbacks.getConnectionStatus(server.name);
+      clearAuthDisplay();
       this.authNotice = `OAuth failed for ${serverName}: ${message}`;
       this.authInFlight = null;
       this.tui.requestRender();
@@ -710,6 +761,12 @@ class McpPanel {
 
       if (this.importNotice) {
         lines.push(row(fg(t.needsAuth, italic(sanitizeDisplayText(this.importNotice)))));
+        lines.push(emptyRow());
+      }
+      if (this.authUrl) {
+        for (const line of this.renderAuthUrlLines(innerW)) {
+          lines.push(row(line));
+        }
         lines.push(emptyRow());
       }
       if (this.authNotice) {

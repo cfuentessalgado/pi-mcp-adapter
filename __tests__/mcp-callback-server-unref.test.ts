@@ -12,8 +12,10 @@ type MockServer = {
 const mocks = vi.hoisted(() => {
   const state = {
     configuredPort: 4337,
+    configuredHost: "localhost",
     activePort: 4337,
     callbackPath: "/callback",
+    activeHost: "localhost",
   };
 
   const runtime = {
@@ -56,6 +58,11 @@ const mocks = vi.hoisted(() => {
     createServer,
     getConfiguredOAuthCallbackPort: vi.fn(() => state.configuredPort),
     getOAuthCallbackPort: vi.fn(() => state.activePort),
+    getConfiguredOAuthCallbackHost: vi.fn(() => state.configuredHost),
+    getOAuthCallbackHost: vi.fn(() => state.activeHost),
+    setOAuthCallbackHost: vi.fn((host: string) => {
+      state.activeHost = host;
+    }),
     getOAuthCallbackPath: vi.fn(() => state.callbackPath),
     setOAuthCallbackPath: vi.fn((path: string) => {
       state.callbackPath = path.startsWith("/") ? path : `/${path}`;
@@ -75,6 +82,9 @@ vi.mock("../mcp-oauth-provider.ts", () => ({
   getConfiguredOAuthCallbackPort: mocks.getConfiguredOAuthCallbackPort,
   getOAuthCallbackPath: mocks.getOAuthCallbackPath,
   getOAuthCallbackPort: mocks.getOAuthCallbackPort,
+  getConfiguredOAuthCallbackHost: mocks.getConfiguredOAuthCallbackHost,
+  getOAuthCallbackHost: mocks.getOAuthCallbackHost,
+  setOAuthCallbackHost: mocks.setOAuthCallbackHost,
   setOAuthCallbackPath: mocks.setOAuthCallbackPath,
   setOAuthCallbackPort: mocks.setOAuthCallbackPort,
 }));
@@ -127,6 +137,33 @@ describe("mcp-callback-server", () => {
     expect(mocks.runtime.servers[0]?.listen).not.toHaveBeenCalledWith(0, "127.0.0.1", expect.any(Function));
     expect(mocks.state.activePort).toBe(3118);
     expect(mocks.state.callbackPath).toBe("/custom/callback");
+  });
+
+  it("binds MCP_OAUTH_CALLBACK_HOST when configured", async () => {
+    mocks.state.configuredHost = "0.0.0.0";
+    try {
+      const { ensureCallbackServer } = await import("../mcp-callback-server.ts");
+
+      await ensureCallbackServer();
+
+      expect(mocks.runtime.servers[0]?.listen).toHaveBeenCalledWith(0, "0.0.0.0", expect.any(Function));
+      expect(mocks.setOAuthCallbackHost).toHaveBeenCalledWith("0.0.0.0");
+    } finally {
+      mocks.state.configuredHost = "localhost";
+    }
+  });
+
+  it("lets MCP_OAUTH_CALLBACK_HOST win over the redirectUri-derived host", async () => {
+    mocks.state.configuredHost = "0.0.0.0";
+    try {
+      const { ensureCallbackServer } = await import("../mcp-callback-server.ts");
+
+      await ensureCallbackServer({ strictPort: true, port: 3118, callbackHost: "127.0.0.1", callbackPath: "/callback" });
+
+      expect(mocks.runtime.servers[0]?.listen).toHaveBeenCalledWith(3118, "0.0.0.0", expect.any(Function));
+    } finally {
+      mocks.state.configuredHost = "localhost";
+    }
   });
 
   it("does not unref when bind fails", async () => {

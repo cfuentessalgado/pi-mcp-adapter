@@ -29,6 +29,7 @@ import {
 // Callback server configuration
 const DEFAULT_OAUTH_CALLBACK_PORT = 19876
 const DEFAULT_OAUTH_CALLBACK_PATH = "/callback"
+const DEFAULT_OAUTH_CALLBACK_HOST = "localhost"
 
 let configuredOAuthCallbackPort = DEFAULT_OAUTH_CALLBACK_PORT
 
@@ -39,8 +40,26 @@ if (process.env.MCP_OAUTH_CALLBACK_PORT) {
   }
 }
 
+/**
+ * Validate a callback bind host. Accepts hostnames, IPv4, and bare IPv6
+ * literals (for example "0.0.0.0", "myhost.tailnet.ts.net", "::", "::1").
+ */
+export function isValidCallbackHost(host: string): boolean {
+  return host.length > 0 && host.length <= 253 && /^[A-Za-z0-9._:-]+$/.test(host)
+}
+
+let configuredOAuthCallbackHost = DEFAULT_OAUTH_CALLBACK_HOST
+
+if (process.env.MCP_OAUTH_CALLBACK_HOST) {
+  const parsedHost = process.env.MCP_OAUTH_CALLBACK_HOST.trim()
+  if (isValidCallbackHost(parsedHost)) {
+    configuredOAuthCallbackHost = parsedHost
+  }
+}
+
 let oauthCallbackPort = configuredOAuthCallbackPort
 let oauthCallbackPath = DEFAULT_OAUTH_CALLBACK_PATH
+let oauthCallbackHost = configuredOAuthCallbackHost
 
 export function getConfiguredOAuthCallbackPort(): number {
   return configuredOAuthCallbackPort
@@ -52,6 +71,18 @@ export function getOAuthCallbackPort(): number {
 
 export function setOAuthCallbackPort(port: number): void {
   oauthCallbackPort = port
+}
+
+export function getConfiguredOAuthCallbackHost(): string {
+  return configuredOAuthCallbackHost
+}
+
+export function getOAuthCallbackHost(): string {
+  return oauthCallbackHost
+}
+
+export function setOAuthCallbackHost(host: string): void {
+  oauthCallbackHost = host
 }
 
 export function getOAuthCallbackPath(): string {
