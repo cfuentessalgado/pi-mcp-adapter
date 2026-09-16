@@ -15,7 +15,7 @@ import {
 import { lazyConnect, updateMetadataCache, updateStatusBar, getFailureAgeSeconds } from "./init.ts";
 import { loadMetadataCache } from "./metadata-cache.ts";
 import { buildToolMetadata } from "./tool-metadata.ts";
-import { supportsOAuth, authenticate, removeAuth, formatAuthorizationUrlMessage, extractCallbackEndpoint } from "./mcp-auth-flow.ts";
+import { supportsOAuth, authenticate, removeAuth, formatAuthorizationUrlMessage, extractCallbackEndpoint, getActiveCallbackEndpoint } from "./mcp-auth-flow.ts";
 import { getAuthForUrl } from "./mcp-auth.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
 import { openPath } from "./utils.ts";
@@ -182,7 +182,7 @@ export async function authenticateServer(
           formatAuthorizationUrlMessage(serverName, authorizationUrl),
           "info"
         );
-        options.displayAuthUrl?.(authorizationUrl, extractCallbackEndpoint(authorizationUrl) ?? null);
+        options.displayAuthUrl?.(authorizationUrl, getActiveCallbackEndpoint() ?? extractCallbackEndpoint(authorizationUrl) ?? null);
         if (options.prompt !== true) return;
         const decision = await ctx.ui.select(
           [

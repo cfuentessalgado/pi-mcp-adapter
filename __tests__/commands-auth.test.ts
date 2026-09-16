@@ -12,6 +12,7 @@ vi.mock("../mcp-auth-flow.ts", () => ({
   formatAuthorizationUrlMessage: (serverName: string, authorizationUrl: string) =>
     `Open this URL to authenticate ${serverName}:\n\n${authorizationUrl}\n\nAfter approving, return to Pi; the local callback will complete automatically.`,
   extractCallbackEndpoint: () => null,
+  getActiveCallbackEndpoint: () => null,
 }));
 
 vi.mock("../init.ts", () => ({

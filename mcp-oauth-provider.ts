@@ -85,6 +85,18 @@ export function setOAuthCallbackHost(host: string): void {
   oauthCallbackHost = host
 }
 
+/**
+ * The host advertised to OAuth providers in redirect URIs.
+ * Wildcard binds (0.0.0.0, ::) are not routable for a browser, so they
+ * advertise localhost (reachable through tunnels); explicit hosts advertise
+ * themselves so the auth server can redirect straight to this machine.
+ */
+export function getAdvertisedCallbackHost(): string {
+  const host = oauthCallbackHost
+  if (host === "0.0.0.0" || host === "::") return "localhost"
+  return host
+}
+
 export function getOAuthCallbackPath(): string {
   return oauthCallbackPath
 }
@@ -124,7 +136,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   ) {
     this.redirectUrlSnapshot = config.grantType === "client_credentials"
       ? undefined
-      : config.redirectUri ?? `http://localhost:${getOAuthCallbackPort()}${getOAuthCallbackPath()}`
+      : config.redirectUri ?? `http://${getAdvertisedCallbackHost()}:${getOAuthCallbackPort()}${getOAuthCallbackPath()}`
   }
 
   private get usesClientCredentials(): boolean {

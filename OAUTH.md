@@ -81,7 +81,7 @@ You can optionally provide a pre-registered client:
 
 Dynamic clients normally omit `oauth.redirectUri`; the adapter starts the callback server lazily on `localhost` and asks the OS for an available local port when auth begins. Use `oauth.redirectUri` when the provider requires a pre-registered callback, such as Slack MCP's Claude-compatible `http://localhost:3118/callback`. The URI must use `http://`, include an explicit port, and its host/path become the bound callback endpoint.
 
-Set `MCP_OAUTH_CALLBACK_HOST` to bind the callback server to a different interface, for example `0.0.0.0` (all IPv4 interfaces) or a tailscale address. This host only controls local binding; the advertised `redirect_uri` stays loopback-based unless you set `oauth.redirectUri` explicitly.
+Set `MCP_OAUTH_CALLBACK_HOST` to bind the callback server to a different interface, for example `0.0.0.0` (all IPv4 interfaces), a LAN IP, or a tailscale address. The advertised `redirect_uri` follows this host, so the auth server redirects the browser straight to it. Wildcard binds (`0.0.0.0`, `::`) keep advertising `localhost` because a browser cannot route to a wildcard address; use tunnels for those. The value is read once when the extension loads, so export it before starting Pi (or run `/reload` after setting it).
 
 ### Non-Interactive `client_credentials`
 
@@ -141,7 +141,7 @@ Open the returned URL in your local browser. The response also names the callbac
 ssh -L 19876:localhost:19876 <remote-host>
 ```
 
-The `/mcp` panel and `/mcp-auth` command show the same URL and callback endpoint while auth runs. In the panel the URL is wrapped as a clickable OSC 8 hyperlink and an `ssh -L` hint appears for loopback endpoints. `/mcp-auth` asks Open / Skip before launching the browser; Skip keeps the flow alive so you can tunnel the port first. Bind a non-loopback interface with `MCP_OAUTH_CALLBACK_HOST` (for example `0.0.0.0` or a tailscale address) when a tunnel is not what you want.
+The `/mcp` panel and `/mcp-auth` command show the same URL and callback endpoint while auth runs. In the panel the URL is wrapped as a clickable OSC 8 hyperlink and an `ssh -L` hint appears for loopback endpoints. `/mcp-auth` asks Open / Skip before launching the browser; Skip keeps the flow alive so you can tunnel the port first. Bind a non-loopback interface with `MCP_OAUTH_CALLBACK_HOST` (for example a LAN IP or a tailscale address) when a tunnel is not what you want; with a specific host set, the advertised redirect follows it.
 
 After approval, copy the full redirected localhost URL from the browser address bar (the page may fail to load locally) and complete the same pending auth flow:
 

@@ -13,11 +13,17 @@ import open from "open"
 import { McpOAuthProvider, type McpOAuthConfig } from "./mcp-oauth-provider.ts"
 import {
   ensureCallbackServer,
+  isCallbackServerRunning,
   waitForCallback,
   cancelPendingCallback,
   stopCallbackServer,
   releaseCallbackServer,
 } from "./mcp-callback-server.ts"
+import {
+  getOAuthCallbackHost,
+  getOAuthCallbackPath,
+  getOAuthCallbackPort,
+} from "./mcp-oauth-provider.ts"
 import {
   getAuthForUrl,
   isTokenExpired,
@@ -49,6 +55,23 @@ export interface OAuthCallbackEndpoint {
   host: string
   port: number
   path: string
+}
+
+/**
+ * Return the endpoint the callback server is actually bound to, or null when
+ * no callback server is running. This is the truth for display purposes;
+ * the redirect_uri in an authorization URL can differ (loopback default).
+ */
+export function getActiveCallbackEndpoint(): OAuthCallbackEndpoint | null {
+  try {
+    if (!isCallbackServerRunning()) return null
+    const host = getOAuthCallbackHost()
+    const port = getOAuthCallbackPort()
+    if (!host || !port) return null
+    return { host, port, path: getOAuthCallbackPath() }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -89,7 +112,7 @@ export function formatAuthorizationUrlMessage(serverName: string, authorizationU
     authorizationUrl,
   ]
 
-  const endpoint = extractCallbackEndpoint(authorizationUrl)
+  const endpoint = getActiveCallbackEndpoint() ?? extractCallbackEndpoint(authorizationUrl)
   if (endpoint) {
     lines.push(
       "",

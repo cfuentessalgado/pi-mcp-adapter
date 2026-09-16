@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   stopCallbackServer: vi.fn(),
   reserveCallbackServer: vi.fn(),
   releaseCallbackServer: vi.fn(),
+  isCallbackServerRunning: vi.fn(() => false),
   open: vi.fn(),
   sdkAuth: vi.fn(),
   finishAuth: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("../mcp-callback-server.ts", () => ({
   stopCallbackServer: mocks.stopCallbackServer,
   reserveCallbackServer: mocks.reserveCallbackServer,
   releaseCallbackServer: mocks.releaseCallbackServer,
+  isCallbackServerRunning: mocks.isCallbackServerRunning,
 }));
 
 vi.mock("open", () => ({
